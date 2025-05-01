@@ -138,6 +138,7 @@ pub mod token {
         pub sub: Subject<T>, // Subject
         pub exp: TimeStamp,  // Expiration time (Unix timestamp)
         pub iat: TimeStamp,  // Issued at (Unix timestamp)
+        pub typ: String,     // Type
         pub iss: String,     // Issuer
         pub aud: String,     // Audience
         pub jti: JWTID,      // JWT ID
@@ -159,6 +160,10 @@ pub mod token {
         /// Returns the issuer of the token.
         pub fn iss(&self) -> &str {
             &self.iss
+        }
+        /// Returns the type of the token.
+        pub fn typ(&self) -> &str {
+            &self.typ
         }
         /// Returns the audience of the token.
         pub fn aud(&self) -> &str {
