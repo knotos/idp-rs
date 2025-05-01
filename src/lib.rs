@@ -1,2 +1,2 @@
-mod jsonwebtoken;
+pub mod jsonwebtoken;
 mod totp;
