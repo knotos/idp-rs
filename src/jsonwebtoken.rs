@@ -94,18 +94,6 @@ impl IdentityProviderJWT {
         Ok(result)
     }
 
-    /// Refreshes a token by generating a new one with updated expiration.
-    pub fn refresh_token(
-        &self,
-        token: &token::TokenClaims<impl DeserializeOwned + Clone + Serialize>,
-        refresh_ttl_secs: i64,
-    ) -> Result<token::Token> {
-        let mut claims = token.clone();
-        claims.exp.extend(refresh_ttl_secs);
-        let new_token = token::Token::generate(claims, self.secret.expose_secret())?;
-        Ok(new_token)
-    }
-
     /// Namespaced Redis key construction.
     fn create_key(&self, key: &str, token_id: &str) -> String {
         format!("idp:jwt:{}:{}", key, token_id)
