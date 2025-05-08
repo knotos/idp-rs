@@ -102,7 +102,6 @@ impl IdentityProviderJWT {
 
 /// Custom error type for the identity provider.
 #[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum Error {
     #[error("Token error: {0}")]
     TokenError(#[from] token::TokenError),
