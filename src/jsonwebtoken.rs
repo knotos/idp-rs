@@ -309,7 +309,6 @@ pub mod token {
 
     /// Custom error type for token-related operations.
     #[derive(Error, Debug)]
-    #[non_exhaustive]
     pub enum TokenError {
         #[error("JWT error: {0}")]
         JwtError(#[from] jsonwebtoken::errors::Error),
