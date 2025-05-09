@@ -290,6 +290,9 @@ pub mod token {
         pub fn extend(&mut self, seconds: i64) {
             self.0 += seconds;
         }
+        pub fn to_i64(&self) -> i64 {
+            self.0
+        }
     }
 
     impl From<i64> for TimeStamp {
