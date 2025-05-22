@@ -42,16 +42,16 @@ impl IdentityProviderJWT {
     }
 
     /// Generates a new token with the provided claims.
-    pub fn generate_token(
+    pub fn generate_token<T: serde::Serialize + serde::de::DeserializeOwned>(
         &self,
-        claims: token::TokenClaims<impl serde::Serialize>,
+        claims: token::TokenClaims<T>,
     ) -> Result<token::Token> {
         let token = token::Token::generate(claims, self.secret.expose_secret())?;
         Ok(token)
     }
 
     /// Validates a token and returns its claims.
-    pub fn validate_token<T: serde::de::DeserializeOwned>(
+    pub fn validate_token<T: serde::de::DeserializeOwned + serde::Serialize>(
         &self,
         token: &token::Token,
     ) -> Result<token::TokenClaims<T>> {
@@ -64,7 +64,7 @@ impl IdentityProviderJWT {
     }
 
     /// Revokes a token by storing its JTI in Redis.
-    pub async fn revoke_token<T: DeserializeOwned>(
+    pub async fn revoke_token<T: Serialize + DeserializeOwned>(
         &self,
         key: &str,
         claims: &token::TokenClaims<T>,
@@ -84,10 +84,10 @@ impl IdentityProviderJWT {
     }
 
     /// Checks if a token has been revoked.
-    pub async fn is_token_revoked(
+    pub async fn is_token_revoked<T: Serialize + DeserializeOwned>(
         &self,
         key: &str,
-        token: &token::TokenClaims<impl DeserializeOwned>,
+        token: &token::TokenClaims<T>,
     ) -> Result<bool> {
         let key = self.create_key(key, token.jti.to_string().as_str());
         let result = self.redis.exists(key).await?;
@@ -121,17 +121,27 @@ pub mod token {
     /// Represents the claims in a JWT token.
     #[derive(Debug, Serialize, Deserialize, Clone, Builder)]
     #[builder(pattern = "owned", setter(into), build_fn(error = "TokenError"))]
-    pub struct TokenClaims<T> {
+    pub struct TokenClaims<T>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        #[serde(
+            serialize_with = "serde_helpers::serialize_json",
+            deserialize_with = "serde_helpers::deserialize_json"
+        )]
         pub sub: Subject<T>, // Subject
-        pub exp: TimeStamp,  // Expiration time (Unix timestamp)
-        pub iat: TimeStamp,  // Issued at (Unix timestamp)
-        pub typ: String,     // Type
-        pub iss: String,     // Issuer
-        pub aud: String,     // Audience
-        pub jti: JWTID,      // JWT ID
+        pub exp: TimeStamp, // Expiration time (Unix timestamp)
+        pub iat: TimeStamp, // Issued at (Unix timestamp)
+        pub typ: String,    // Type
+        pub iss: String,    // Issuer
+        pub aud: String,    // Audience
+        pub jti: JWTID,     // JWT ID
     }
 
-    impl<T> TokenClaims<T> {
+    impl<T> TokenClaims<T>
+    where
+        T: Serialize + DeserializeOwned,
+    {
         /// Returns the subject of the token.
         pub fn sub(&self) -> &Subject<T> {
             &self.sub
@@ -177,10 +187,10 @@ pub mod token {
         }
 
         /// Generates a new JWT token from the given claims and secret.
-        pub fn generate<T: Serialize>(
-            claims: TokenClaims<T>,
-            secret: &[u8],
-        ) -> Result<Self, TokenError> {
+        pub fn generate<T>(claims: TokenClaims<T>, secret: &[u8]) -> Result<Self, TokenError>
+        where
+            T: Serialize + for<'de> Deserialize<'de>,
+        {
             let token = jsonwebtoken::encode(
                 &jsonwebtoken::Header::default(),
                 &claims,
@@ -190,7 +200,7 @@ pub mod token {
         }
 
         /// Decodes the token into `TokenClaims` using the provided secret and validation.
-        pub fn to_claims<T: for<'de> Deserialize<'de>>(
+        pub fn to_claims<T: for<'de> Deserialize<'de> + Serialize>(
             &self,
             secret: &[u8],
             validation: jsonwebtoken::Validation,
@@ -212,6 +222,7 @@ pub mod token {
         /// Secure constant-time comparison.
         pub fn secure_eq(&self, other: &Self) -> bool {
             use subtle::ConstantTimeEq;
+
             self.token.as_bytes().ct_eq(other.token.as_bytes()).into()
         }
     }
@@ -347,6 +358,120 @@ pub mod token {
     impl std::fmt::Display for JWTID {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             write!(f, "{}", self.0)
+        }
+    }
+    mod serde_helpers {
+        use base64::{Engine as _, engine::general_purpose};
+        use rmp_serde::{from_slice, to_vec};
+        use serde::Deserialize;
+        use serde::{Serialize, de::DeserializeOwned};
+
+        pub fn serialize_msgpack<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            T: Serialize,
+            S: serde::Serializer,
+        {
+            let bytes = to_vec(value).map_err(serde::ser::Error::custom)?;
+            let b64 = general_purpose::STANDARD.encode(bytes);
+            serializer.serialize_str(&b64)
+        }
+
+        pub fn deserialize_msgpack<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+        where
+            T: DeserializeOwned,
+            D: serde::Deserializer<'de>,
+        {
+            let s = String::deserialize(deserializer)?;
+            let bytes = general_purpose::STANDARD
+                .decode(&s)
+                .map_err(serde::de::Error::custom)?;
+            from_slice(&bytes).map_err(serde::de::Error::custom)
+        }
+
+        pub fn serialize_json<T, S>(value: &T, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            T: Serialize,
+            S: serde::Serializer,
+        {
+            let json_str = serde_json::to_string(value).map_err(serde::ser::Error::custom)?;
+            serializer.serialize_str(&json_str)
+        }
+
+        pub fn deserialize_json<'de, T, D>(deserializer: D) -> Result<T, D::Error>
+        where
+            T: DeserializeOwned,
+            D: serde::Deserializer<'de>,
+        {
+            let s = String::deserialize(deserializer)?;
+            serde_json::from_str(&s).map_err(serde::de::Error::custom)
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use serde::{Deserialize, Serialize};
+        #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+        struct CustomClaims {
+            username: String,
+            admin: bool,
+        }
+
+        #[test]
+        fn test_token_encode_decode_custom_claims() {
+            let claims = TokenClaimsBuilder::<CustomClaims>::default()
+                .sub(Subject::new(CustomClaims {
+                    username: "alice".to_string(),
+                    admin: true,
+                }))
+                .exp(TimeStamp::from_now(3600))
+                .iat(TimeStamp::from_now(0))
+                .typ("access".to_string())
+                .iss("issuer".to_string())
+                .aud("audience".to_string())
+                .jti(JWTID::new())
+                .build()
+                .unwrap();
+
+            let secret = b"supersecretkey";
+            let token = Token::generate(claims.clone(), secret).unwrap();
+
+            let mut validation = jsonwebtoken::Validation::default();
+            validation.set_audience(&["audience"]);
+            let decoded_claims: TokenClaims<CustomClaims> =
+                token.to_claims(secret, validation).unwrap();
+
+            assert_eq!(decoded_claims.sub().value(), claims.sub().value());
+            assert_eq!(decoded_claims.typ(), claims.typ());
+            assert_eq!(decoded_claims.iss(), claims.iss());
+            assert_eq!(decoded_claims.aud(), claims.aud());
+            assert_eq!(decoded_claims.jti().to_string(), claims.jti().to_string());
+        }
+
+        #[test]
+        fn test_token_encode_decode_primitive_claims() {
+            let claims = TokenClaimsBuilder::<u32>::default()
+                .sub(Subject::new(42u32))
+                .exp(TimeStamp::from_now(3600))
+                .iat(TimeStamp::from_now(0))
+                .typ("number".to_string())
+                .iss("issuer".to_string())
+                .aud("audience".to_string())
+                .jti(JWTID::new())
+                .build()
+                .unwrap();
+
+            let secret = b"anothersecret";
+            let token = Token::generate(claims.clone(), secret).unwrap();
+
+            let mut validation = jsonwebtoken::Validation::default();
+            validation.set_audience(&["audience"]);
+            let decoded_claims: TokenClaims<u32> = token.to_claims(secret, validation).unwrap();
+
+            assert_eq!(decoded_claims.sub().value(), claims.sub().value());
+            assert_eq!(decoded_claims.typ(), claims.typ());
+            assert_eq!(decoded_claims.iss(), claims.iss());
+            assert_eq!(decoded_claims.aud(), claims.aud());
+            assert_eq!(decoded_claims.jti().to_string(), claims.jti().to_string());
         }
     }
 }
